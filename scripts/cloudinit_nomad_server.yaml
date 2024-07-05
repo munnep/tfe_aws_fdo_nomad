@@ -1,0 +1,467 @@
+#cloud-config
+write_files:
+  - path: /var/tmp/nomad.hcl
+    permissions: '0640'
+    content: |
+      # Values for server_count, retry_join, and ip_address are
+      # placed here during Terraform setup and come from the 
+      # ../shared/data-scripts/user-data-server.sh script
+      
+      data_dir  = "/opt/nomad/data"
+      bind_addr = "0.0.0.0"
+      datacenter = "dc1"
+      
+      advertise {
+        http = "IP_ADDRESS"
+        rpc  = "IP_ADDRESS"
+        serf = "IP_ADDRESS"
+      }
+      
+      acl {
+        enabled = true
+      }
+      
+      server {
+        enabled          = true
+        bootstrap_expect = SERVER_COUNT
+      
+        server_join {
+          retry_join = ["RETRY_JOIN"]
+        }
+      }
+  - path: /etc/systemd/system/nomad.service
+    permissions: '0640'
+    content: |
+      [Unit]
+      Description=Nomad
+      Documentation=https://nomadproject.io/docs/
+      Wants=network-online.target
+      After=network-online.target
+      StartLimitIntervalSec=10
+      StartLimitBurst=3
+      
+      [Service]
+      ExecReload=/bin/kill -HUP $MAINPID
+      ExecStart=/usr/local/bin/nomad agent -config /etc/nomad.d
+      KillMode=process
+      KillSignal=SIGINT
+      LimitNOFILE=infinity
+      LimitNPROC=infinity
+      Restart=on-failure
+      RestartSec=2
+      TasksMax=infinity
+      
+      [Install]
+      WantedBy=multi-user.target
+                 
+  - path: /var/tmp/install_software.sh 
+    permissions: '0750'
+    content: |
+      #!/bin/bash
+      mkdir -p /ops/shared/config
+      cp /var/tmp/nomad.hcl /ops/shared/config/nomad.hcl
+    
+      ACL_DIRECTORY="/ops/shared/config"
+      NOMAD_BOOTSTRAP_TOKEN="/var/tmp/nomad_bootstrap"
+      NOMAD_USER_TOKEN="/var/tmp/nomad_user_token"
+      CONFIGDIR="/ops/shared/config"
+      NOMADVERSION=${nomad_version}
+      NOMADDOWNLOAD=https://releases.hashicorp.com/nomad/$${NOMADVERSION}/nomad_$${NOMADVERSION}_linux_amd64.zip
+      NOMADCONFIGDIR="/etc/nomad.d"
+      NOMADDIR="/opt/nomad"
+      HOME_DIR="ubuntu"
+      CLOUD_ENV=${cloud_env}
+      
+      # Install phase begin ---------------------------------------
+      
+      # Install dependencies
+      sudo apt-get update && sudo apt-get install -y software-properties-common
+      # IP_ADDRESS=$(curl http://instance-data/latest/meta-data/local-ipv4)
+      # PUBLIC_IP=$(curl http://instance-data/latest/meta-data/public-ipv4)
+
+      AWS_TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+      IP_ADDRESS=`curl -H "X-aws-ec2-metadata-token: $AWS_TOKEN" -v http://169.254.169.254/latest/meta-data/local-ipv4`
+      PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $AWS_TOKEN" -v http://169.254.169.254/latest/meta-data/public-ipv4`
+      
+      sudo apt-get update
+      sudo apt-get install -y unzip tree redis-tools jq curl tmux
+      sudo apt-get clean
+      
+      
+      # Disable the firewall
+      
+      sudo ufw disable || echo "ufw not installed"
+      
+      # Download and install Nomad
+      curl -L $NOMADDOWNLOAD > nomad.zip
+      
+      sudo unzip nomad.zip -d /usr/local/bin
+      sudo chmod 0755 /usr/local/bin/nomad
+      sudo chown root:root /usr/local/bin/nomad
+      
+      sudo mkdir -p $NOMADCONFIGDIR
+      sudo chmod 755 $NOMADCONFIGDIR
+      sudo mkdir -p $NOMADDIR
+      sudo chmod 755 $NOMADDIR
+      
+      # Docker
+      distro=$(lsb_release -si | tr '[:upper:]' '[:lower:]')
+      sudo apt-get install -y apt-transport-https ca-certificates gnupg2 
+      curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add -
+      sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/$${distro} $(lsb_release -cs) stable"
+      sudo apt-get update
+      sudo apt-get install -y docker-ce
+      
+      # Java
+      sudo add-apt-repository -y ppa:openjdk-r/ppa
+      sudo apt-get update 
+      sudo apt-get install -y openjdk-8-jdk
+      JAVA_HOME=$(readlink -f /usr/bin/java | sed "s:bin/java::")
+      
+      # Install phase finish ---------------------------------------
+      
+      echo "Install complete"
+      
+      # Server setup phase begin -----------------------------------
+      SERVER_COUNT=${server_count}
+      RETRY_JOIN="${retry_join}"
+      
+      sed -i "s/SERVER_COUNT/$SERVER_COUNT/g" $CONFIGDIR/nomad.hcl
+      sed -i "s/RETRY_JOIN/$RETRY_JOIN/g" $CONFIGDIR/nomad.hcl
+      sed -i "s/IP_ADDRESS/$IP_ADDRESS/g" $CONFIGDIR/nomad.hcl
+      sudo cp $CONFIGDIR/nomad.hcl $NOMADCONFIGDIR
+      # sudo cp $CONFIGDIR/nomad.service /etc/systemd/system/nomad.service
+      
+      sudo systemctl enable nomad.service
+      sudo systemctl start nomad.service
+      
+      # Wait for Nomad to restart
+      for i in {1..9}; do
+          # capture stdout and stderr
+          set +e
+          sleep 1
+          OUTPUT=$(nomad -v 2>&1)
+          if [ $? -ne 0 ]; then
+              continue
+          else
+              exit 0
+          fi
+      done
+      
+      export NOMAD_ADDR=http://$IP_ADDRESS:4646
+      
+      # Add hostname to /etc/hosts
+      
+      echo "127.0.0.1 $(hostname)" | sudo tee --append /etc/hosts
+      
+      # Add Docker bridge network IP to /etc/resolv.conf (at the top)
+      
+      echo "nameserver $DOCKER_BRIDGE_IP_ADDRESS" | sudo tee /etc/resolv.conf.new
+      cat /etc/resolv.conf | sudo tee --append /etc/resolv.conf.new
+      sudo mv /etc/resolv.conf.new /etc/resolv.conf
+      
+      # Set env vars
+      echo "export NOMAD_ADDR=http://$IP_ADDRESS:4646" | sudo tee --append /home/$HOME_DIR/.bashrc
+      echo "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64/jre"  | sudo tee --append /home/$HOME_DIR/.bashrc
+      
+      # Server setup phase finish -----------------------------------      
+  - path: /var/tmp/tfe_policy.hcl 
+    permissions: '0750'
+    content: |
+      namespace "terraform-enterprise" {
+          capabilities = [
+              "submit-job",
+              "dispatch-job",
+              "list-jobs",
+              "read-job",
+              "read-logs"
+          ]
+      }
+      namespace "terraform-enterprise-agents" {
+          capabilities = [
+              "submit-job",
+              "dispatch-job",
+              "list-jobs",
+              "read-job",
+              "read-logs"
+          ]
+      }
+      namespace "tfe-agents" {
+          capabilities = [
+              "submit-job",
+              "dispatch-job",
+              "list-jobs",
+              "read-job",
+              "read-logs"
+          ]
+      }    
+  - path: /var/tmp/tfe_job.hcl 
+    permissions: '0750'
+    content: |
+      variable "tfe_image" {
+        description = "The TFE image to use"
+        type        = string
+        default     = "images.releases.hashicorp.com/hashicorp/terraform-enterprise:${tfe_release}"
+      }
+    
+      variable "tfe_image_username" {
+        description = "Username for the registry to download TFE image"
+        type        = string
+      }
+    
+      variable "tfe_image_password" {
+        description = "Password for the registry to download TFE image"
+        type        = string
+      }
+    
+      variable "namespace" {
+        description = "The Nomad namespace to run the job"
+        type        = string
+        default     = "terraform-enterprise"
+      }
+    
+      job "tfe-job" {
+        datacenters = ["dc1"]
+        namespace   = var.namespace
+        type = "service"
+    
+        group "tfe-group" {
+          count = 1
+          network {
+            port "tfe" {
+              static = 443
+            }
+            port "vault" {
+              static = 8201
+            }
+          }
+    
+          service {
+            name     = "tfe-svc"
+            port     = "tfe"
+            provider = "nomad"
+            check {
+              name     = "tfe_probe"
+              type     = "http"
+              protocol = "https"
+              port     = "tfe"
+              path     = "/_health_check"
+              interval = "5s"
+              timeout  = "2s"
+              method   = "GET"
+            }
+          }
+    
+          task "tfe-task" {
+            driver = "docker"
+    
+            identity {
+              # Expose Workload Identity in NOMAD_TOKEN env var
+              env = true
+            }
+    
+            template {
+              data = <<EOF
+              {{- with nomadVar "nomad/jobs/tfe-job/tfe-group/tfe-task" -}}
+              TFE_LICENSE={{ .tfe_license }}
+              TFE_HOSTNAME={{ .tfe_hostname }}
+              {{- end -}}
+              EOF
+              destination = "secrets/env.env"
+              env         = true
+              change_mode = "restart"
+            }
+    
+            template {
+              data = <<EOF
+              {{- with nomadVar "nomad/jobs/tfe-job/tfe-group/tfe-task" -}}
+              {{ base64Decode .tfe_tls_cert_file.Value }}
+              {{- end -}}
+              EOF
+              destination = "secrets/cert.pem"
+              env         = false
+              change_mode = "restart"
+            }
+    
+            template {
+              data = <<EOF
+              {{- with nomadVar "nomad/jobs/tfe-job/tfe-group/tfe-task" -}}
+              {{ base64Decode .tfe_tls_key_file.Value }}
+              {{- end -}}
+              EOF
+              destination = "secrets/key.pem"
+              env         = false
+              change_mode = "restart"
+            }
+    
+            template {
+              data = <<EOF
+              {{- with nomadVar "nomad/jobs/tfe-job/tfe-group/tfe-task" -}}
+              {{ base64Decode .tfe_tls_ca_bundle_file.Value }}
+              {{- end -}}
+              EOF
+              destination = "secrets/bundle.pem"
+              env         = false
+              change_mode = "restart"
+            }
+    
+            config {
+              image = var.tfe_image
+              ports = ["tfe", "vault"]
+    
+              auth {
+                username = var.tfe_image_username
+                password = var.tfe_image_password
+              }
+    
+              volumes = [
+                "secrets:/etc/ssl/private/terraform-enterprise",
+              ]
+            }
+    
+            resources {
+              cpu    = 2500
+              memory = 4096
+            }
+    
+            env {
+              TFE_DATABASE_HOST = "${pg_address}"
+              TFE_DATABASE_USER = "postgres"
+              TFE_DATABASE_PASSWORD = "${rds_password}"
+              TFE_DATABASE_NAME = "${pg_dbname}"
+              TFE_DATABASE_PARAMETERS = "sslmode=require"
+    
+              TFE_OBJECT_STORAGE_TYPE = "s3"
+              TFE_OBJECT_STORAGE_S3_REGION = "${region}"
+              TFE_OBJECT_STORAGE_S3_BUCKET = "${tfe_bucket}"
+              TFE_OBJECT_STORAGE_S3_USE_INSTANCE_PROFILE= "true"
+    
+              TFE_REDIS_HOST = "${redis_host}"
+              TFE_REDIS_USE_AUTH = "false"
+    
+              TFE_RUN_PIPELINE_NOMAD_ADDRESS = "http://${nomad_server}:4646"
+              TFE_RUN_PIPELINE_NOMAD_TLS_CONFIG_INSECURE = "true"
+              TFE_RUN_PIPELINE_DRIVER = "nomad"
+              TFE_VAULT_DISABLE_MLOCK = "true"
+              TFE_ENCRYPTION_PASSWORD = "${tfe_password}"
+              TFE_OPERATIONAL_MODE = "active-active"
+    
+              # If you are using the default internal vault, this should be the private routable IP address of the node itself.
+              TFE_VAULT_CLUSTER_ADDRESS = "http://${nomad_client}"
+    
+              TFE_TLS_CERT_FILE = "/etc/ssl/private/terraform-enterprise/cert.pem"
+              TFE_TLS_KEY_FILE = "/etc/ssl/private/terraform-enterprise/key.pem"
+              TFE_TLS_CA_BUNDLE_FILE = "/etc/ssl/private/terraform-enterprise/bundle.pem"
+            }
+          }
+        }
+      }
+  - path: /var/tmp/agent_job.hcl 
+    permissions: '0750'      
+    content: |
+      job "tfe-agent-job" {
+          type = "batch"
+          namespace = "tfe-agents"
+          datacenters = ["dc1"]
+          node_pool = "default"
+          constraint {
+            attribute = "$${attr.kernel.name}"
+            value     = "linux"
+          }
+          parameterized {
+            payload       = "forbidden"
+            meta_required = [
+              "TFC_AGENT_TOKEN",
+              "TFC_ADDRESS"
+            ]
+            meta_optional = [
+              "TFE_RUN_PIPELINE_IMAGE",
+            	"TFC_AGENT_AUTO_UPDATE",
+              "TFC_AGENT_CACHE_DIR",
+              "TFC_AGENT_SINGLE",
+              "HTTPS_PROXY",
+              "HTTP_PROXY",
+              "NO_PROXY"
+            ]
+          }
+          group "tfe-agent-group" {
+            task "tfc-agent-task" {
+              driver = "docker"
+              template {
+                      destination = "local/image.env"
+                      env         = true
+                      change_mode = "noop"
+                      data        = <<EOF
+              {{ $image := env "NOMAD_META_TFE_RUN_PIPELINE_IMAGE" }}
+              {{ if ne $image "" }}TFE_RUN_PIPELINE_IMAGE={{$image}} {{ else }}TFE_RUN_PIPELINE_IMAGE="hashicorp/tfc-agent:latest"  {{ end }}
+              EOF
+                    }
+              config {
+                image = "$${TFE_RUN_PIPELINE_IMAGE}"
+              }
+        		env {
+                TFC_ADDRESS           = "$${NOMAD_META_TFC_ADDRESS}"
+                TFC_AGENT_TOKEN       = "$${NOMAD_META_TFC_AGENT_TOKEN}"
+                TFC_AGENT_AUTO_UPDATE = "$${NOMAD_META_TFC_AGENT_AUTO_UPDATE}"
+                TFC_AGENT_CACHE_DIR	  = "$${NOMAD_META_TFC_AGENT_CACHE_DIR}"
+                TFC_AGENT_SINGLE      = "$${NOMAD_META_TFC_AGENT_SINGLE}"
+                HTTPS_PROXY           = "$${NOMAD_META_HTTPS_PROXY}"
+                HTTP_PROXY            = "$${NOMAD_META_HTTP_PROXY}"
+                NO_PROXY              = "$${NOMAD_META_NO_PROXY}"
+              }
+              resources {
+                cpu = 2000
+                memory = 2048
+              }
+            }
+          }
+        }
+  - path: /var/tmp/tfe_variables.hcl 
+    permissions: '0750'      
+    content: |
+     items {
+       tfe_hostname="${dns_hostname}.${dns_zonename}",
+       tfe_license="${tfe_license}",
+       tfe_tls_ca_bundle_file="${full_chain}",
+       tfe_tls_cert_file="${full_chain}",
+       tfe_tls_key_file="${private_key_pem}"
+     }
+  - path: /var/tmp/configure_nomad.sh 
+    permissions: '0750'
+    content: |
+      
+      # set the nomad server
+      export NOMAD_ADDR=http://localhost:4646  
+
+      # get the authentication token
+      nomad acl bootstrap | grep -i secret | awk -F "=" '{print $2}' | xargs > /var/tmp/nomad-management.token 
+
+      # set the authentication token
+      export NOMAD_TOKEN=$(cat /var/tmp/nomad-management.token) 
+
+      # add it to the default .profile for ssh 
+      echo "export NOMAD_TOKEN=$(cat /var/tmp/nomad-management.token)" >> ~/.bashrc
+
+      # create the namespaces
+      nomad namespace apply -description "for terraform enterprise" terraform-enterprise
+      nomad namespace apply -description "for terraform enterprise agents" terraform-enterprise-agents
+      nomad namespace apply -description "for terraform enterprise agents" tfe-agents
+       
+      # apply the policy
+      nomad acl policy apply \
+         -namespace terraform-enterprise -job tfe-job \
+         -group tfe-group -task tfe-task \
+         terraform-enterprise-policy /var/tmp/tfe_policy.hcl
+      
+      # add the variables
+      nomad var put -force --namespace=terraform-enterprise nomad/jobs/tfe-job/tfe-group/tfe-task @/var/tmp/tfe_variables.hcl
+
+      # Run Terraform Enterprise on nomad
+      nomad run -var="tfe_image_username=terraform" -var="tfe_image_password=${tfe_license}" /var/tmp/tfe_job.hcl
+
+      # Install the agent job 
+      nomad job run /var/tmp/agent_job.hcl
+
+runcmd:
+  - sudo bash /var/tmp/install_software.sh 
+  - sudo bash /var/tmp/configure_nomad.sh
