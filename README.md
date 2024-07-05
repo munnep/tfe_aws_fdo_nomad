@@ -3,7 +3,6 @@ Install Terraform Enterprise on Nomad with Redis + S3 + DB from AWS as an active
 
 This repository is based on the following repositories
 
-- Terraform Enterprise active-active with replicated from [here](https://github.com/munnep/tfe_aws_active_mode_step)
 - Terraform Enterprise FDO with docker single instance from [here](https://github.com/munnep/tfe_next_aws_external)
 - The nomad getting started tutorial from [here](https://developer.hashicorp.com/nomad/tutorials/get-started/gs-start-a-cluster)
 
@@ -20,7 +19,7 @@ This code will create a Nomad Server and Nomad client on which we will deploy Te
 # Diagram
 
 Detailed Diagram of the environment:  
-
+![](./diagram/diagram_tfe_aws_fdo_nomad.png)
 
 # Prerequisites
 
@@ -59,19 +58,19 @@ export AWS_SESSION_TOKEN=
 ```
 - create a file called `variables.auto.tfvars` with the following contents and your own values. Example will create 2 TFE nodes at the start.  
 ```hcl
-tag_prefix                 = "tfe21"                                    # TAG prefix for names to easily find your AWS resources
+tag_prefix                 = "tfe26"                                    # TAG prefix for names to easily find your AWS resources
 region                     = "eu-north-1"                               # Region to create the environment
 vpc_cidr                   = "10.221.0.0/16"                            # subnet mask that can be used 
 rds_password               = "Password#1"                               # password used for the RDS environment
-dns_hostname               = "tfe21"                                    # DNS hostname for the TFE
+dns_hostname               = "tfe26"                                    # DNS hostname for the TFE
 dns_zonename               = "aws.munnep.com"                           # DNS zone name to be used
 tfe_password               = "Password#1"                               # TFE password for the dashboard and encryption of the data
 certificate_email          = "patrick.munne@hashicorp.com"              # Your email address used by TLS certificate registration
-terraform_client_version   = "1.1.7"                                    # Terraform version you want to have installed on the client machine
 public_key                 = "ssh-rsa AAAAB3Nzf"                        # The public key for you to connect to the server over SSH
 tfe_active_active          = true                                       # TFE instance setup of active/active - false to start with
 tfe_license                = "<your_license>"                           # license key for TFE as string
-tfe_release                = "v202309-1"                                # version of TFE you want to install
+tfe_release                = "v202406-1"                                # version of TFE you want to install
+nomad_version              = "1.8.1"                                    # version of nomad server/client to be installed
 ```
 - Terraform initialize
 ```sh
@@ -85,19 +84,31 @@ terraform plan
 ```sh
 terraform apply
 ```
-- Terraform output should create 58 resources and show you the public dns string you can use to connect to the TFE instance
+- Terraform output should create 42 resources and show you the public dns string you can use to connect to the TFE instance
 ```sh
-Plan: 45 to add, 0 to change, 0 to destroy.
+Plan: 42 to add, 0 to change, 0 to destroy.
 
 Outputs:
+port_forwarding_nomad_portal = "ssh -L 4646:localhost:4646 ubuntu@54.154.96.155"
+ssh_nomad_client = "ssh ubuntu@54.154.96.155"
+ssh_nomad_server = "ssh ubuntu@54.154.96.155"
+tfe_appplication = "https://tfe26.aws.munnep.com"
+```
+- Get your nomad credential from the nomand server by connection using `ssh_nomad_server`
+```
+ubuntu@ip-10-221-1-23:~$ sudo su -
+root@ip-10-221-1-23:~# echo $NOMAD_TOKEN
+02d98a8b-3585-3ea1-b64a-se3fdzdf2f                   <-- token to use
+```
+- to login to the nomad portal make use of the `port_forwarding_nomad_portal` command from the previous to build a tunnel
+- On your local machine open a browser to [http://localhost:4646](http://localhost:4646)  
+![](media/20240705152508.png)  
+- Use the nomad token to authenticate    
+![](media/20240705152545.png)  
+- Verify the jobs for Terraform enterprise and the agent are deployed. This could take 10 minutes for full deployment because of health checks that need to pass from Nomad side  
+![](media/20240705154109.png)  
+- Terraform Enterprise should be deployed and you can login using the username `admin` and the password you specified on your variables
 
-```
-- The ssh_tfe_server is empty. You will have to do another terraform apply for this to be visible as at the end of the former execution the server are not in a running state yet
-```sh
-terraform apply
-```
-- Output is now visible to 
-```
 
 ## testing
 
@@ -107,13 +118,13 @@ cd test_code
 ```
 - login to your terraform environment just created
 ```sh
-terraform login tfe21.aws.munnep.com
+terraform login tfe26.aws.munnep.com
 ```
 - Edit the `main.tf` file with the hostname of your TFE environment
 ```hcl
 terraform {
   cloud {
-    hostname = "tfe21.aws.munnep.com"
+    hostname = "tfe26.aws.munnep.com"
     organization = "test"
 
     workspaces {
@@ -146,13 +157,6 @@ terraform_data.test: Creation complete after 0s [id=de1c6969-e277-26f1-5434-9020
 
 Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
 ```
-
-
-
-# TODO
-
-
-# DONE
 
 
 

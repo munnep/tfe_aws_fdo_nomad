@@ -175,5 +175,70 @@ write_files:
       echo "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64/jre"  | sudo tee --append /home/$HOME_DIR/.bashrc
       
       # Client setup phase finish -----------------------------------      
+  - path: /etc/tfe_initial_user.json
+    permissions: '0755'
+    content: |  
+      {
+          "username": "admin",
+          "email": "${certificate_email}",
+          "password": "${tfe_password}"
+      }   
+  - path: /etc/tfe_create_organization.json
+    permissions: '0755'
+    content: |  
+      {
+          "data": {
+              "type": "organizations",
+              "attributes": {
+                  "name": "test",
+                  "email": "${certificate_email}"
+              }
+          }
+      }             
+  - path: /var/tmp/tfe_setup.sh
+    permissions: '0777'
+    content: |
+      #!/usr/bin/env bash
+      
+      # We have to wait for TFE be fully functioning before we can continue
+      while true; do
+          if curl -kI "https://${dns_hostname}.${dns_zonename}/admin" 2>&1 | grep -w "200\|301" ; 
+          then
+              echo "TFE is up and running"
+              echo "Will continue in 1 minutes with the final steps"
+              sleep 60
+              break
+          else
+              echo "TFE is not available yet. Please wait..."
+              sleep 60
+          fi
+      done
+
+      # go into the directory of the compose.yaml file
+      pushd /opt/tfe/
+      
+
+      Get the container name of the docker container
+      TFE_CONTAINER=$(docker ps | awk '/tfe-task/{print $NF}')
+
+      echo "Get initial activation token"
+      INITIAL_TOKEN=`docker exec $TFE_CONTAINER tfectl admin token`
+
+      # get the admin token you can user to create the first user
+      # Create the first user called admin and get the token
+      curl -k --header "Content-Type: application/json" --request POST --data @/etc/tfe_initial_user.json  --url https://${dns_hostname}.${dns_zonename}/admin/initial-admin-user?token=$INITIAL_TOKEN | tee /etc/tfe_initial_user_output.json
+      
+      
+      TOKEN=`jq -e -r .token /etc/tfe_initial_user_output.json`
+      [[ $? -eq 0 && "$TOKEN" ]] || exit 1
+
+      # create organization test
+      curl -k \
+        --header "Authorization: Bearer $TOKEN" \
+        --header "Content-Type: application/vnd.api+json" \
+        --request POST \
+        --data @/etc/tfe_create_organization.json \
+        https://${dns_hostname}.${dns_zonename}/api/v2/organizations            
 runcmd:
   - sudo bash /var/tmp/install_software.sh 
+  - sudo bash /var/tmp/tfe_setup.sh

@@ -7,7 +7,7 @@ output "port_forwarding_nomad_portal" {
 }
 
 output "ssh_nomad_client" {
-  value = "ssh ubuntu@${aws_eip.nomad_server-eip.public_ip}"
+  value = "ssh ubuntu@${aws_eip.nomad_client-eip.public_ip}"
 }
 
 output "tfe_appplication" {
