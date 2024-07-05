@@ -37,28 +37,9 @@ variable "tfe_password" {
   description = "password for tfe user"
 }
 
-variable "asg_min_size" {
-  description = "Autoscaling group minimal size"
-  default     = 1
-}
-
-variable "asg_max_size" {
-  description = "Autoscaling group maximal size"
-  default     = 1
-}
-
-variable "asg_desired_capacity" {
-  description = "Autoscaling group running number of instances"
-  default     = 1
-}
-
 variable "public_key" {
   type        = string
   description = "public to use on the instances"
-}
-
-variable "terraform_client_version" {
-  description = "Terraform client installed on the terraform client machine"
 }
 
 variable "tfe_license" {

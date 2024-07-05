@@ -6,12 +6,12 @@ data "http" "my_public_ip" {
 }
 
 locals {
-  ifconfig_co_json = jsondecode(data.http.my_public_ip.body)
+  ifconfig_co_json = jsondecode(data.http.my_public_ip.response_body)
+  namespace = "terraform-enterprise"
+  full_chain = "${acme_certificate.certificate.certificate_pem}${acme_certificate.certificate.issuer_pem}"
+  retry_join = "provider=aws tag_key=NomadJoinTag tag_value=auto-join"
 }
 
-output "my_ip_addr" {
-  value = local.ifconfig_co_json.ip
-}
 
 resource "aws_vpc" "main" {
   cidr_block = var.vpc_cidr
@@ -336,76 +336,6 @@ resource "aws_acm_certificate" "cert" {
   certificate_chain = acme_certificate.certificate.issuer_pem
 }
 
-# resource "aws_route53_record" "www" {
-#   zone_id = data.aws_route53_zone.base_domain.zone_id
-#   name    = var.dns_hostname
-#   type    = "CNAME"
-#   ttl     = "300"
-#   records = [aws_lb.lb_application.dns_name]
-# }
-
-# # loadbalancer Target Group
-# resource "aws_lb_target_group" "lb_target_group2" {
-#   name     = "${var.tag_prefix}-target-group2"
-#   port     = 443
-#   protocol = "HTTPS"
-#   vpc_id   = aws_vpc.main.id
-
-#   health_check {
-#     enabled             = true
-#     healthy_threshold   = 2
-#     protocol            = "HTTPS"
-#     timeout             = 25
-#     unhealthy_threshold = 5
-#     path                = "/_health_check"
-#   }
-# }
-
-# # loadbalancer Target Group
-# resource "aws_lb_target_group" "lb_target_group3" {
-#   name     = "${var.tag_prefix}-target-group3"
-#   port     = 19999
-#   protocol = "HTTP"
-#   vpc_id   = aws_vpc.main.id
-# }
-
-# # application load balancer
-# resource "aws_lb" "lb_application" {
-#   name               = "${var.tag_prefix}-lb"
-#   internal           = false
-#   load_balancer_type = "application"
-#   security_groups    = [aws_security_group.tfe_server_sg.id]
-#   subnets            = [aws_subnet.public1.id, aws_subnet.public2.id]
-
-#   tags = {
-#     Environment = "${var.tag_prefix}-lb"
-#   }
-# }
-
-# resource "aws_lb_listener" "front_end2" {
-#   load_balancer_arn = aws_lb.lb_application.arn
-#   port              = "443"
-#   protocol          = "HTTPS"
-#   ssl_policy        = "ELBSecurityPolicy-2016-08"
-#   certificate_arn   = aws_acm_certificate.cert.arn
-
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.lb_target_group2.arn
-#   }
-# }
-
-# resource "aws_lb_listener" "front_end3" {
-#   load_balancer_arn = aws_lb.lb_application.arn
-#   port              = "19999"
-#   protocol          = "HTTP"
-
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.lb_target_group3.arn
-#   }
-# }
-
 resource "aws_key_pair" "default-key" {
   key_name   = "${var.tag_prefix}-key"
   public_key = var.public_key
@@ -469,55 +399,177 @@ resource "aws_elasticache_cluster" "redis" {
   subnet_group_name    = aws_elasticache_subnet_group.redis.name
 }
 
-# #
-# resource "aws_launch_configuration" "active" {
-#   name_prefix          = "${var.tag_prefix}-lc-active"
-#   image_id             = data.aws_ami.ubuntu.id
-#   instance_type        = "t3.2xlarge"
-#   security_groups      = [aws_security_group.tfe_server_sg.id]
-#   iam_instance_profile = aws_iam_instance_profile.profile.name
-#   key_name             = "${var.tag_prefix}-key"
 
-#   root_block_device {
-#     volume_size = 50
-#     volume_type = "io1"
-#     iops        = 1000
-#   }
 
-#   ebs_block_device {
-#     device_name = "/dev/sdh"
-#     volume_size = 32
-#     volume_type = "io1"
-#     iops        = 1000
-#   }
+# nomad client server
 
-#   ebs_block_device {
-#     device_name = "/dev/sdi"
-#     volume_size = 100
-#     volume_type = "io1"
-#     iops        = 2000
-#   }
+resource "aws_network_interface" "nomad_client-priv" {
+  subnet_id   = aws_subnet.public1.id
+  private_ips = [cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 24)]
 
-#   user_data = templatefile("${path.module}/scripts/cloudinit_tfe_server.yaml", {
-#     tag_prefix                 = var.tag_prefix
-#     dns_hostname               = var.dns_hostname
-#     tfe-private-ip             = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 22)
-#     tfe_password               = var.tfe_password
-#     tfe_license                = var.tfe_license
-#     dns_zonename               = var.dns_zonename
-#     pg_dbname                  = aws_db_instance.default.db_name
-#     pg_address                 = aws_db_instance.default.address
-#     rds_password               = var.rds_password
-#     tfe_bucket                 = "${var.tag_prefix}-bucket"
-#     region                     = var.region
-#     tfe_release                = var.tfe_release
-#     certificate_email          = var.certificate_email
-#     tfe_client_ip              = flatten(aws_network_interface.terraform_client-priv.private_ips)[0]
-#     redis_host                 = lookup(aws_elasticache_cluster.redis.cache_nodes[0], "address", "No redis created")
-#   })
+  tags = {
+    Name = "primary_network_interface"
+  }
+}
 
-#   lifecycle {
-#     create_before_destroy = true
-#   }
+resource "aws_network_interface_sg_attachment" "sgclient_attachment" {
+  security_group_id    = aws_security_group.tfe_server_sg.id
+  network_interface_id = aws_network_interface.nomad_client-priv.id
+}
 
-# }
+resource "aws_eip" "nomad_client-eip" {
+  domain = "vpc"
+
+  instance                  = aws_instance.nomad_client.id
+  associate_with_private_ip = aws_network_interface.nomad_client-priv.private_ip
+  depends_on                = [aws_internet_gateway.gw]
+
+  tags = {
+    Name = "${var.tag_prefix}-client-eip"
+  }
+}
+
+resource "aws_route53_record" "tfe-instance" {
+  zone_id = data.aws_route53_zone.base_domain.zone_id
+  name    = "${var.dns_hostname}"
+  type    = "A"
+  ttl     = "300"
+  records = [aws_eip.nomad_client-eip.public_ip]
+  depends_on = [
+    aws_eip.nomad_client-eip
+  ]
+}
+
+
+resource "aws_instance" "nomad_client" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.2xlarge"
+  key_name      = "${var.tag_prefix}-key"
+
+  network_interface {
+    network_interface_id = aws_network_interface.nomad_client-priv.id
+    device_index         = 0
+  }
+
+  iam_instance_profile = aws_iam_instance_profile.profile.name
+
+  user_data = templatefile("${path.module}/scripts/cloudinit_nomad_client.yaml", {
+    server_count              = 1
+    region                    = var.region
+    cloud_env                 = "aws"
+    retry_join                = local.retry_join
+    nomad_version             = var.nomad_version
+    dns_hostname               = var.dns_hostname
+    dns_zonename               = var.dns_zonename
+    certificate_email          = var.certificate_email
+    tfe_password               = var.tfe_password
+  })
+
+  root_block_device {
+    volume_size = 40
+  }
+
+  # NomadJoinTag is necessary for nodes to automatically join the cluster
+  tags = merge(
+    {
+      "Name" = "${var.tag_prefix}-client"
+    },
+    {
+      "NomadJoinTag" = "auto-join"
+    },
+    {
+      "NomadType" = "client"
+    }
+  )
+
+  depends_on = [
+    aws_network_interface_sg_attachment.sgclient_attachment, aws_db_instance.default, aws_elasticache_cluster.redis
+  ]
+}
+
+
+# nomad server
+
+resource "aws_network_interface" "nomad_server-priv" {
+  subnet_id   = aws_subnet.public1.id
+  private_ips = [cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 23)]
+
+  tags = {
+    Name = "primary_network_interface"
+  }
+}
+
+resource "aws_network_interface_sg_attachment" "sg2_attachment" {
+  security_group_id    = aws_security_group.tfe_server_sg.id
+  network_interface_id = aws_network_interface.nomad_server-priv.id
+}
+
+resource "aws_eip" "nomad_server-eip" {
+  domain = "vpc"
+
+  instance                  = aws_instance.nomad_server.id
+  associate_with_private_ip = aws_network_interface.nomad_server-priv.private_ip
+  depends_on                = [aws_internet_gateway.gw]
+
+
+
+  tags = {
+    Name = "${var.tag_prefix}-client-eip"
+  }
+}
+
+resource "aws_instance" "nomad_server" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.small"
+  key_name      = "${var.tag_prefix}-key"
+
+  network_interface {
+    network_interface_id = aws_network_interface.nomad_server-priv.id
+    device_index         = 0
+  }
+
+  iam_instance_profile = aws_iam_instance_profile.profile.name
+
+  user_data = base64gzip(templatefile("${path.module}/scripts/cloudinit_nomad_server.yaml", {
+    server_count              = 1
+    region                    = var.region
+    cloud_env                 = "aws"
+    retry_join                = local.retry_join
+    nomad_version             = var.nomad_version
+    tag_prefix                 = var.tag_prefix
+    dns_hostname               = var.dns_hostname
+    tfe-private-ip             = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 22)
+    tfe_password               = var.tfe_password
+    tfe_license                = var.tfe_license
+    dns_zonename               = var.dns_zonename
+    pg_dbname                  = aws_db_instance.default.db_name
+    pg_address                 = aws_db_instance.default.address
+    rds_password               = var.rds_password
+    tfe_bucket                 = "${var.tag_prefix}-bucket"
+    region                     = var.region
+    tfe_release                = var.tfe_release
+    certificate_email          = var.certificate_email
+    redis_host                 = lookup(aws_elasticache_cluster.redis.cache_nodes[0], "address", "No redis created")
+    full_chain        = base64encode("${acme_certificate.certificate.certificate_pem}${acme_certificate.certificate.issuer_pem}")
+    private_key_pem   = base64encode(lookup(acme_certificate.certificate, "private_key_pem"))
+    nomad_client      = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 24)
+    nomad_server      = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 23)
+  }))
+
+  # NomadJoinTag is necessary for nodes to automatically join the cluster
+  tags = merge(
+    {
+      "Name" = "${var.tag_prefix}-server"
+    },
+    {
+      "NomadJoinTag" = "auto-join"
+    },
+    {
+      "NomadType" = "server"
+    }
+  )
+
+  depends_on = [
+    aws_network_interface_sg_attachment.sg2_attachment, aws_db_instance.default, aws_elasticache_cluster.redis
+  ]
+}
