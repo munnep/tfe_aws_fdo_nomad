@@ -7,9 +7,9 @@ data "http" "my_public_ip" {
 
 locals {
   ifconfig_co_json = jsondecode(data.http.my_public_ip.response_body)
-  namespace = "terraform-enterprise"
-  full_chain = "${acme_certificate.certificate.certificate_pem}${acme_certificate.certificate.issuer_pem}"
-  retry_join = "provider=aws tag_key=NomadJoinTag tag_value=auto-join"
+  namespace        = "terraform-enterprise"
+  full_chain       = "${acme_certificate.certificate.certificate_pem}${acme_certificate.certificate.issuer_pem}"
+  retry_join       = "provider=aws tag_key=NomadJoinTag tag_value=auto-join"
 }
 
 
@@ -431,7 +431,7 @@ resource "aws_eip" "nomad_client-eip" {
 
 resource "aws_route53_record" "tfe-instance" {
   zone_id = data.aws_route53_zone.base_domain.zone_id
-  name    = "${var.dns_hostname}"
+  name    = var.dns_hostname
   type    = "A"
   ttl     = "300"
   records = [aws_eip.nomad_client-eip.public_ip]
@@ -454,15 +454,15 @@ resource "aws_instance" "nomad_client" {
   iam_instance_profile = aws_iam_instance_profile.profile.name
 
   user_data = templatefile("${path.module}/scripts/cloudinit_nomad_client.yaml", {
-    server_count              = 1
-    region                    = var.region
-    cloud_env                 = "aws"
-    retry_join                = local.retry_join
-    nomad_version             = var.nomad_version
-    dns_hostname               = var.dns_hostname
-    dns_zonename               = var.dns_zonename
-    certificate_email          = var.certificate_email
-    tfe_password               = var.tfe_password
+    server_count      = 1
+    region            = var.region
+    cloud_env         = "aws"
+    retry_join        = local.retry_join
+    nomad_version     = var.nomad_version
+    dns_hostname      = var.dns_hostname
+    dns_zonename      = var.dns_zonename
+    certificate_email = var.certificate_email
+    tfe_password      = var.tfe_password
   })
 
   root_block_device {
@@ -531,25 +531,25 @@ resource "aws_instance" "nomad_server" {
   iam_instance_profile = aws_iam_instance_profile.profile.name
 
   user_data = base64gzip(templatefile("${path.module}/scripts/cloudinit_nomad_server.yaml", {
-    server_count              = 1
-    region                    = var.region
-    cloud_env                 = "aws"
-    retry_join                = local.retry_join
-    nomad_version             = var.nomad_version
-    tag_prefix                 = var.tag_prefix
-    dns_hostname               = var.dns_hostname
-    tfe-private-ip             = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 22)
-    tfe_password               = var.tfe_password
-    tfe_license                = var.tfe_license
-    dns_zonename               = var.dns_zonename
-    pg_dbname                  = aws_db_instance.default.db_name
-    pg_address                 = aws_db_instance.default.address
-    rds_password               = var.rds_password
-    tfe_bucket                 = "${var.tag_prefix}-bucket"
-    region                     = var.region
-    tfe_release                = var.tfe_release
-    certificate_email          = var.certificate_email
-    redis_host                 = lookup(aws_elasticache_cluster.redis.cache_nodes[0], "address", "No redis created")
+    server_count      = 1
+    region            = var.region
+    cloud_env         = "aws"
+    retry_join        = local.retry_join
+    nomad_version     = var.nomad_version
+    tag_prefix        = var.tag_prefix
+    dns_hostname      = var.dns_hostname
+    tfe-private-ip    = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 22)
+    tfe_password      = var.tfe_password
+    tfe_license       = var.tfe_license
+    dns_zonename      = var.dns_zonename
+    pg_dbname         = aws_db_instance.default.db_name
+    pg_address        = aws_db_instance.default.address
+    rds_password      = var.rds_password
+    tfe_bucket        = "${var.tag_prefix}-bucket"
+    region            = var.region
+    tfe_release       = var.tfe_release
+    certificate_email = var.certificate_email
+    redis_host        = lookup(aws_elasticache_cluster.redis.cache_nodes[0], "address", "No redis created")
     full_chain        = base64encode("${acme_certificate.certificate.certificate_pem}${acme_certificate.certificate.issuer_pem}")
     private_key_pem   = base64encode(lookup(acme_certificate.certificate, "private_key_pem"))
     nomad_client      = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 24)
