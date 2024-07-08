@@ -376,7 +376,7 @@ write_files:
             ]
             meta_optional = [
               "TFE_RUN_PIPELINE_IMAGE",
-            	"TFC_AGENT_AUTO_UPDATE",
+              "TFC_AGENT_AUTO_UPDATE",
               "TFC_AGENT_CACHE_DIR",
               "TFC_AGENT_SINGLE",
               "HTTPS_PROXY",
@@ -403,7 +403,7 @@ write_files:
                 TFC_ADDRESS           = "$${NOMAD_META_TFC_ADDRESS}"
                 TFC_AGENT_TOKEN       = "$${NOMAD_META_TFC_AGENT_TOKEN}"
                 TFC_AGENT_AUTO_UPDATE = "$${NOMAD_META_TFC_AGENT_AUTO_UPDATE}"
-                TFC_AGENT_CACHE_DIR	  = "$${NOMAD_META_TFC_AGENT_CACHE_DIR}"
+                TFC_AGENT_CACHE_DIR   = "$${NOMAD_META_TFC_AGENT_CACHE_DIR}"
                 TFC_AGENT_SINGLE      = "$${NOMAD_META_TFC_AGENT_SINGLE}"
                 HTTPS_PROXY           = "$${NOMAD_META_HTTPS_PROXY}"
                 HTTP_PROXY            = "$${NOMAD_META_HTTP_PROXY}"
