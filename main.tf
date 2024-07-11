@@ -139,11 +139,11 @@ resource "aws_security_group" "tfe_server_sg" {
   }
 
   ingress {
-    description = "https from internet"
+    description = "ssh from internet"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["${local.ifconfig_co_json.ip}/32"]
   }
 
   ingress {
@@ -232,6 +232,16 @@ resource "aws_s3_object" "certificate_artifacts_s3_objects" {
   bucket  = "${var.tag_prefix}-software"
   key     = each.key # TODO set your own bucket path
   content = lookup(acme_certificate.certificate, "${each.key}")
+}
+
+# fetch the arn of the SecurityComputeAccess policy
+data "aws_iam_policy" "SecurityComputeAccess" {
+  name = "SecurityComputeAccess"
+}
+# add the SecurityComputeAccess policy to IAM role connected to your EC2 instance
+resource "aws_iam_role_policy_attachment" "SSM" {
+  role       = aws_iam_role.role.name
+  policy_arn = data.aws_iam_policy.SecurityComputeAccess.arn
 }
 
 resource "aws_iam_role" "role" {
